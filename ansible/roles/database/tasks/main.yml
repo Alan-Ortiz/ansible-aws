@@ -1,0 +1,57 @@
+- name: MySQL
+  apt:
+    name: ['mysql-server', 'libmysqlclient-dev', 'python3', 'python3-pip' ]
+    update_cache: true
+    state: latest
+
+- name: install MySQL-Python
+  pip:
+    name: PyMySQL
+    executable: pip
+    state: forcereinstall
+
+- name: Copy MySQL conf
+  copy:
+    src: ./templates/mysqld.cnf
+    dest: /etc/mysql/mysql.conf.d/
+
+- name: start up the mysql service  
+  shell: "service mysql start"  
+
+- name: ensure mysql is enabled to run on startup  
+  service: name=mysql state=started enabled=true
+
+- name: update mysql root password for all root accounts  
+  mysql_user:  
+    name: root  
+    host: localhost
+    config_file: /etc/mysql/mysql.conf.d/mysqld.cnf
+    login_unix_socket: /var/run/mysqld/mysqld.sock
+    password: "{{ mysql_root_password }}"  
+    login_user: root  
+    login_password: "{{ mysql_root_password }}"  
+    check_implicit_admin: yes  
+    priv: "*.*:ALL,GRANT"  
+
+- name: Create maintainx DB
+  community.mysql.mysql_db:
+    config_file: /etc/mysql/mysql.conf.d/mysqld.cnf
+    login_password: "{{ mysql_root_password }}"  
+    login_user: root  
+    name: "{{ db_conf.DB_NAME }}"
+    state: present
+
+- name: Create database user  and password  with all database privileges
+  mysql_user:
+    login_password: "{{ mysql_root_password }}"
+    login_user: root
+    name: "{{ db_conf.DB_USER }}"
+    host: '%'
+    password: "{{ db_conf.DB_PASSWORD }}"
+    priv: '*.*:ALL'
+    state: present
+
+- name: start MySql
+  service:
+    name: mysql
+    state: restarted

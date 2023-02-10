@@ -1,0 +1,62 @@
+- name: Copy APP 
+  copy:
+    src: "../app/"
+    dest: /app
+
+- name: install python3-pip 
+  apt:
+    name: ['python3-pip', 'nginx']
+    update_cache: true
+    state: present
+
+- name: Copy certs and nginx.cong
+  copy:
+    src: "./roles/deploy/templates/"
+    dest: /etc/nginx/conf.d/
+
+- name: Install pymysql
+  pip:
+     name: [ "pymysql"]
+     executable: pip
+     state: latest
+
+- name: Setting DB dynamic private IP
+  shell: echo "export DB_HOST="{{ hostvars['localhost']['db_inst_internal_ip'] }}"" >> /app/app.sh
+  args:
+    executable: /bin/bash
+
+- name: Create vars file
+  shell: echo "export  "{{ item.key }}={{ item.value }}"" >> /app/app.sh
+  with_dict: "{{ db_conf }}"
+  args:
+    executable: /bin/bash
+
+- name: Launch APP
+  shell: "{{ item }}"
+  with_items: 
+  - "chmod  +x /app/app.sh" 
+  - "source /app/app.sh"
+  - echo "nohup python3 /app/app.py" >> /app/app.sh
+  args:
+    executable: /bin/bash
+
+- name: Copy daemon file
+  copy:
+    src: ./roles/deploy/tasks/templates/webapp.service
+    dest: /etc/systemd/system/
+
+- command: "{{ item }}"
+  with_items:
+  - "unlink /etc/nginx/sites-enabled/default"
+  - "systemctl daemon-reload"
+  - "systemctl enable nginx"
+  - "systemctl enable webapp.service"
+
+- name: restart webapp-service
+  service:
+    name: "{{ item }}"
+    state: started
+  with_items:
+  - webapp
+  - nginx
+

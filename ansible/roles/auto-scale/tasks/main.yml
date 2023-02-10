@@ -1,0 +1,73 @@
+- name: Create AMI
+  amazon.aws.ec2_ami:
+    region: "{{ region }}"
+    instance_id: "{{ hostvars['localhost']['base_instance_id'] }}"
+    name: "webapp-ami-{{ ansible_date_time.iso8601 | regex_replace('[^a-zA-Z0-9]', '-') }}"
+    wait: no
+    state: present
+    tags: 
+      Name: web-ami
+  register: ami
+  ignore_errors: yes
+
+- name: create launch configuration 
+  community.aws.ec2_lc:
+    region: "{{ region }}"
+    name: "webapp-{{ ansible_date_time.iso8601 | regex_replace('[^a-zA-Z0-9]', '-') }}"
+    image_id: "{{ ami.image_id }}"
+    key_name: "{{ keypair }}"
+    instance_type: t2.micro
+    security_groups: "{{ security_group.s1 }}"
+    instance_monitoring: yes
+  register: lc_out
+  ignore_errors: yes
+
+- debug:
+    var: lc_out
+
+- name: Creating auto scaling group
+  community.aws.ec2_asg:
+    name: maintanx_asg
+    region: "{{ region }}"
+    load_balancers: elb
+    launch_config_name: "{{ lc_out.name }}"
+    vpc_zone_identifier: "{{ hostvars['localhost']['alan_subnet_id'] }}"
+    health_check_type: ELB
+    health_check_period: 150
+    min_size: 1
+    max_size: 4
+    desired_capacity: 2
+    tags:
+      - type: webapps
+    wait_for_instances: no
+    state: present
+  register: asg_result
+
+- name: Configure Scaling Policies
+  ec2_scaling_policy:
+    region: "{{ region }}"
+    name: "{{ item.name }}"
+    asg_name: maintanx_asg
+    state: present
+    adjustment_type: "{{ item.adjustment_type }}"
+    min_adjustment_step: "{{ item.min_adjustment_step }}"
+    scaling_adjustment: "{{ item.scaling_adjustment }}"
+    cooldown: "{{ item.cooldown }}"
+  with_items:
+    - name: "Increase Group Size"
+      adjustment_type: "ChangeInCapacity"
+      scaling_adjustment: +1
+      min_adjustment_step: 1
+      cooldown: 180
+    - name: "Decrease Group Size"
+      adjustment_type: "ChangeInCapacity"
+      scaling_adjustment: -1
+      min_adjustment_step: 1
+      cooldown: 300
+
+#- name: Terminate base app image
+#  amazon.aws.ec2_instance:
+#    region: "{{ region }}"
+#    state: absent
+#    filters:
+#      "tag:Name": "AppServer"

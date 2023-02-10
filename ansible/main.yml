@@ -1,0 +1,32 @@
+---
+- name: Prepare infra
+  hosts: localhost
+  roles:
+    - { role: infra,  tags: infra }
+  tasks:
+  - meta: refresh_inventory
+
+- name: Deploy Database
+  hosts: tag_Name_MySql
+  become: yes
+  user: ubuntu
+  vars:
+    ansible_ssh_private_key_file: "./roles/infra/tasks/files/id_rsa"
+  roles:
+    - { role: database,  tags: database }
+
+- name: APP deployment
+  hosts: tag_Name_AppServer
+  gather_facts: yes
+  become: yes
+  user: ubuntu
+  vars:
+    ansible_ssh_private_key_file: "./roles/infra/tasks/files/id_rsa"
+  roles:
+    - { role: deploy,  tags: deploy }
+
+- name: Autoscaling
+  gather_facts: yes
+  hosts: localhost
+  roles:
+    - { role: auto-scale,  tags: auto-scale }

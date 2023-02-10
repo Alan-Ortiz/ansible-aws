@@ -1,0 +1,12 @@
+[Unit]
+Description=Webapp service
+[Service]
+User=ubuntu
+WorkingDirectory=/app
+ExecStart=bash /app/app.sh
+SuccessExitStatus=143
+TimeoutStopSec=10
+Restart=on-failure
+RestartSec=5
+[Install]
+WantedBy=multi-user.target

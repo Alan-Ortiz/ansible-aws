@@ -1,0 +1,182 @@
+- name: Cert upload to IAM
+  iam_cert:
+    name: MaintainxCertificate
+    state: present
+    cert: "{{ lookup('file', './roles/deploy/templates/server.crt') }}"
+    key: "{{ lookup('file', './roles/deploy/templates/server.key') }}"
+  register: cert
+
+- debug:
+    var: cert.arn
+
+- name: create a VPC 
+  amazon.aws.ec2_vpc_net:
+    name: New_Vpc
+    cidr_block: 10.20.0.0/16
+    region: "{{ region }}"
+  register: VPC
+
+- name: Create Internet gateway
+  amazon.aws.ec2_vpc_igw:
+    region: "{{ region }}"
+    vpc_id: "{{VPC.vpc.id}}"
+    state: present
+  register: igw
+
+- name: Create subnet 
+  amazon.aws.ec2_vpc_subnet:
+    region: "{{ region }}"
+    state: present
+    map_public: yes
+    vpc_id: "{{VPC.vpc.id}}"
+    cidr: 10.20.30.0/24
+    tags:
+      Name: "Alan Subnet"
+  register: Alan_subnet
+
+- name: Register subnet_id
+  set_fact:
+    alan_subnet_id: "{{ Alan_subnet.subnet.id }}"
+
+- name: Set up public subnet route table
+  amazon.aws.ec2_vpc_route_table:
+    vpc_id: "{{VPC.vpc.id}}"
+    region: "{{ region }}"
+    tags:
+      Name: Public
+    subnets:
+      - "Alan Subnet"
+    routes:
+      - dest: 0.0.0.0/0
+        gateway_id: "{{ igw.gateway_id }}"
+
+- name: Setting up security groups for APP
+  amazon.aws.ec2_group:
+     name: "{{ security_group.s1 }}"
+     description: "SSH and HTTPS rules"
+     region: "{{ region }}"
+     rules:
+      - proto: tcp
+        from_port: 80
+        to_port: 80
+        cidr_ip: 0.0.0.0/0
+      - proto: tcp
+        from_port: 443
+        to_port: 443
+        cidr_ip: 0.0.0.0/0
+      - proto: tcp
+        from_port: 22
+        to_port: 22
+        cidr_ip: 0.0.0.0/0
+     rules_egress:
+      - proto: all
+        cidr_ip: 0.0.0.0/0
+     vpc_id: "{{VPC.vpc.id}}"
+  register: app_sg_out
+
+- name: Setting up security groups for DB
+  amazon.aws.ec2_group:
+     name: "{{ security_group.s2 }}"
+     description: "SSH and DB security group"
+     region: "{{ region }}"
+     rules:
+      - proto: tcp
+        from_port: 3306
+        to_port: 3306
+        cidr_ip: 10.20.30.0/24
+      - proto: tcp
+        from_port: 22
+        to_port: 22
+        cidr_ip: 0.0.0.0/0
+     rules_egress:
+      - proto: all
+        cidr_ip: 0.0.0.0/0
+     vpc_id: "{{VPC.vpc.id}}"
+  register: db_sg_out
+
+- name: Create key pair 
+  amazon.aws.ec2_key:
+    region: "{{ region }}"
+    name: temporary_key
+    key_material: "{{ lookup('file', './roles/infra/tasks/files/id_rsa.pub') }}"
+
+- name: Launch MySQL instance
+  ec2:
+    region: "{{ region }}"
+    keypair: "temporary_key"
+    image: "ami-04505e74c0741db8d"
+    instance_type: t2.micro
+    vpc_subnet_id: "{{ Alan_subnet.subnet.id }}"
+    assign_public_ip: yes
+    group: "{{ security_group.s2 }}"
+    instance_tags:
+      Name: MySql
+    wait: yes
+    wait_timeout: 500
+  register: db_info
+
+- name: Register db_inst_internal_ip
+  set_fact: 
+    db_inst_internal_ip: "{{ db_info.instances[0].private_ip}}"
+
+- name: Wait for instance to boot
+  wait_for: host={{ item.public_dns_name }} port=22 delay=60 timeout=350 state=started
+  with_items: "{{ db_info.instances }}"
+
+- name: Launch APP
+  amazon.aws.ec2_instance:
+    region: "{{ region }}"
+    key_name: "temporary_key"
+    image_id: "ami-04505e74c0741db8d"
+    instance_type: t2.micro
+    vpc_subnet_id: "{{ Alan_subnet.subnet.id }}"
+    network:
+      assign_public_ip: yes
+    security_group: "{{ app_sg_out.group_id }}"
+    tags:
+      Name: AppServer
+    wait: yes
+    wait_timeout: 500
+  register: app_out
+
+- name: Register app info
+  set_fact:
+    base_instance_id: "{{ app_out.instances[0].instance_id }}"
+
+- name: Configure Elastic Load Balancers
+  ec2_elb_lb:
+    region: "{{ region }}"
+    security_group_ids: "{{ app_sg_out.group_id }}"
+    name: elb
+    state: present
+    validate_certs: no
+    subnets:
+      - "{{ Alan_subnet.subnet.id }}"
+    connection_draining_timeout: 60
+    purge_listeners: yes
+    debug_botocore_endpoint_logs: yes
+    listeners:
+      - protocol: https
+        load_balancer_port: 443
+        instance_protocol: https
+        instance_port: 443
+        ssl_certificate_id: "{{ cert.arn }}"
+      - protocol: http
+        load_balancer_port: 80
+        instance_protocol: http
+        instance_port: 80
+    health_check:
+      ping_protocol: https
+      ping_path: /
+      response_timeout: 10
+      ping_port: 443
+      interval: 30
+      unhealthy_threshold: 6
+      healthy_threshold: 2
+    wait: yes
+  register: elb_result
+
+- name: Change key permissions if not correct
+  ansible.builtin.file:
+    path: ./roles/infra/tasks/files/id_rsa
+    mode: '0600'

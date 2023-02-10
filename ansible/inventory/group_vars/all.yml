@@ -1,0 +1,17 @@
+region: us-east-1
+security_group:
+  s1: ssh_and_https_group
+  s2: database_and_ssh_group
+keypair: temporary_key
+image_id: ami-0a313d6098716f372
+instance_type: t2.micro
+security_group:
+  s1: ssh_and_https_group
+  s2: database_and_ssh_group
+
+db_host: "oree"
+db_user: "maintainx"
+db_password: "Maintainx.123"
+db_name: "maintainx"
+db_conf: {'DB_USER': 'maintainx','DB_PASSWORD': 'Maintainx.123','DB_NAME': 'maintainx'}
+ssl_arn_id: "arn:aws:iam::818251476472:server-certificate/MaintainxCertificate"
